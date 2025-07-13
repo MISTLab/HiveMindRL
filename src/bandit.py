@@ -169,8 +169,10 @@ class BanditLinear:
 
         self.q_star = np.linspace(start=start, stop=stop, num=self.n_action)
         self.s_q_star = self.q_star
-        self.q_star_th = torch.tensor(self.q_star, device=self.device)
-        self.gap_th = torch.tensor(self.gap, device=self.device)
+        self.q_star_th = torch.tensor(
+            self.q_star, device=self.device, dtype=torch.float32
+        )
+        self.gap_th = torch.tensor(self.gap, device=self.device, dtype=torch.float32)
 
     def return_no_actions(self) -> int:
         """
