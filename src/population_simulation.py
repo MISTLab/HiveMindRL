@@ -7,6 +7,20 @@ from bandit import (
     BanditSigmoid,
 )  # Assuming Bandit class is defined in bandit.py
 
+import os
+import torch
+import multiprocessing as mp
+from functools import partial
+import time
+
+torch.set_num_threads(1)
+
+os.environ["OMP_NUM_THREADS"] = "1"  # OpenMP threads
+os.environ["OPENBLAS_NUM_THREADS"] = "1"  # OpenBLAS (used by NumPy)
+os.environ["MKL_NUM_THREADS"] = "1"  # MKL (used by NumPy on Intel)
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"  # macOS Accelerate
+os.environ["NUMEXPR_NUM_THREADS"] = "1"  # numexpr if used
+
 
 def get_pop_vector(
     pop_types: np.ndarray | torch.Tensor, n_types: int
@@ -91,8 +105,8 @@ def weighted_voter_rule(
     steps: int,
     population_size: int,
     seeds: int,
-    bandit: BanditLinear | BanditSigmoid,
     neighbourhood_size: int,
+    name: str,
     disjoint_neighbourhood: bool,
     device: str = "cpu",
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -102,7 +116,7 @@ def weighted_voter_rule(
       steps (int): Number of steps to run the algorithm
       population_size (int): Size of the population of individuals
       seeds (int): Number of seeds for random initialization
-      bandit (Bandit): The bandit environment to interact with
+      name (str): scenario for bandit
       neighbourhood_size (int): The neighbourhood size where the bees can broadcast and listen to
       disjoint_neighbourhood (bool): Should I have a disjoint neighbourhood or not
       device (str): cpu or cuda
@@ -110,6 +124,9 @@ def weighted_voter_rule(
       mean_qualities (np.ndarray): Array indicating evolution of average payoffs over time
       optimal_option_ratio (np.ndarray): Array indicating evolution optimal option proportion over time
     """
+    torch.manual_seed(int(time.time() * 1e6) % (2**32 - 1))
+    np.random.seed(int(time.time() * 1e6) % (2**32 - 1))
+    bandit = BanditLinear(name=name, device=device)
     mean_qualities = torch.zeros((seeds, steps), device=device)
     optimal_option_ratio = torch.zeros((seeds, steps), device=device)
     types = torch.arange(bandit.n_action)
@@ -174,30 +191,47 @@ def weighted_voter_rule(
 
             else:
                 # sampling (neighbourhood_size - 1) per bee, so you can have influence on multiple bees at the same time.
-                idx = torch.multinomial(
-                    weights, num_samples=neighbourhood_size, replacement=False
-                )
-                neighbours = bees_copy_tiled.gather(1, idx)
-                quality_matrix_nei = quality_matrix[
-                    neighbours
-                ]  # shape: (population_size , neighborhood_size, n_arms)
+                if neighbourhood_size == population_size:
+                    neighbours = bees_copy_tiled
+
+                else:
+                    idx = torch.multinomial(
+                        weights, num_samples=neighbourhood_size, replacement=False
+                    )
+                    neighbours = bees_copy_tiled.gather(1, idx)
+                quality_matrix_nei = quality_matrix[neighbours]
                 quality_sum_per_option_nei = quality_matrix_nei.sum(dim=1)
                 weighted_proportions_nei = (
                     quality_sum_per_option_nei
                     / quality_sum_per_option_nei.sum(dim=1, keepdim=True)
                 )
-                # weighted_proportions_nei = np.einsum(
-                #     "ij,i->ij",
-                #     quality_sum_per_option_nei,
-                #     1 / np.sum(quality_sum_per_option_nei, axis=1),
-                # )
                 pop_opinions = torch.distributions.Categorical(
                     weighted_proportions_nei
                 ).sample()
+            # idx = torch.multinomial(
+            #     weights, num_samples=neighbourhood_size, replacement=False
+            # )
+            # neighbours = bees_copy_tiled.gather(1, idx)
+            # quality_matrix_nei = quality_matrix[
+            #     neighbours
+            # ]  # shape: (population_size , neighborhood_size, n_arms)
+            # quality_sum_per_option_nei = quality_matrix_nei.sum(dim=1)
+            # weighted_proportions_nei = (
+            #     quality_sum_per_option_nei
+            #     / quality_sum_per_option_nei.sum(dim=1, keepdim=True)
+            # )
+            # # weighted_proportions_nei = np.einsum(
+            # #     "ij,i->ij",
+            # #     quality_sum_per_option_nei,
+            # #     1 / np.sum(quality_sum_per_option_nei, axis=1),
+            # # )
+            # pop_opinions = torch.distributions.Categorical(
+            #     weighted_proportions_nei
+            # ).sample()
 
-                # import pdb
+            # import pdb
 
-                # pdb.set_trace()
+            # pdb.set_trace()
 
             # naive implementation of the whole population as my neighbourhood
             # print(pop_opinions)
@@ -228,3 +262,40 @@ def weighted_voter_rule(
         #     )
 
     return mean_qualities.cpu().numpy(), optimal_option_ratio.cpu().numpy()
+
+
+def run_parallel_simulation_wvr(
+    steps: int,
+    population_size: int,
+    seeds: int,
+    neighbourhood_size: int,
+    disjoint_neighbourhood: bool,
+    name: str,
+    n_proc: int,
+    device: str = "cpu",
+) -> tuple[np.ndarray, np.ndarray]:
+
+    iterations = int(seeds // n_proc)
+    args_list = [
+        (
+            steps,
+            population_size,
+            iterations,
+            neighbourhood_size,
+            name,
+            disjoint_neighbourhood,
+            device,
+        )
+        for _ in range(n_proc)
+    ]
+
+    with mp.Pool(processes=n_proc) as pool:
+        results = pool.starmap(weighted_voter_rule, args_list)
+
+    all_mean_qualities, all_opt_ratios = zip(*results)
+    all_mean_qualities = np.stack(all_mean_qualities)
+    all_opt_ratios = np.stack(all_opt_ratios)
+
+    return all_mean_qualities.reshape(seeds, steps), all_opt_ratios.reshape(
+        seeds, steps
+    )
