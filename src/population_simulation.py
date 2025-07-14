@@ -139,7 +139,7 @@ def weighted_voter_rule(
 
     for j in range(iterations):
         seed = int(time.time() * 1e6) % (2**32 - 1)
-        print(f"seed {seed}")
+        # print(f"seed {seed}")
         torch.manual_seed(seed)
         np.random.seed(seed)
         
@@ -224,7 +224,6 @@ def weighted_voter_rule(
                     ).sample()
 
             else: 
-
                 quality_sum_per_option = quality_matrix.sum(dim=0)
                 # weighted proportion which defines the  the distribution of
                 # votes cast for each type
