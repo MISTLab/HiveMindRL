@@ -64,6 +64,14 @@ def imitaton_of_success(
     optimal_type_ratio = np.zeros((seeds, steps))
 
     for j, _ in enumerate(range(seeds)):
+
+        seed = int(time.time() * 1e6) % (2**32 - 1)
+        print(f"seed {seed}")
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        
+        bandit = BanditLinear(name=name, device=device)
+
         pop_types = np.repeat(
             np.arange(bandit.n_action), population_size // bandit.n_action
         )
@@ -104,10 +112,11 @@ def imitaton_of_success(
 def weighted_voter_rule(
     steps: int,
     population_size: int,
-    seeds: int,
+    iterations: int,
     neighbourhood_size: int,
-    name: str,
     disjoint_neighbourhood: bool,
+    use_neighbourhood: bool,
+    name: str,
     device: str = "cpu",
 ) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -115,39 +124,43 @@ def weighted_voter_rule(
     Args:
       steps (int): Number of steps to run the algorithm
       population_size (int): Size of the population of individuals
-      seeds (int): Number of seeds for random initialization
-      name (str): scenario for bandit
+      iterations (int): Number of iterations for random initialization
       neighbourhood_size (int): The neighbourhood size where the bees can broadcast and listen to
       disjoint_neighbourhood (bool): Should I have a disjoint neighbourhood or not
+      use_neighbourhood (bool): use neighbourhood or use a simple  
+      name (str): scenario for bandit
       device (str): cpu or cuda
     Returns:
       mean_qualities (np.ndarray): Array indicating evolution of average payoffs over time
       optimal_option_ratio (np.ndarray): Array indicating evolution optimal option proportion over time
     """
-    torch.manual_seed(int(time.time() * 1e6) % (2**32 - 1))
-    np.random.seed(int(time.time() * 1e6) % (2**32 - 1))
-    bandit = BanditLinear(name=name, device=device)
-    mean_qualities = torch.zeros((seeds, steps), device=device)
-    optimal_option_ratio = torch.zeros((seeds, steps), device=device)
-    types = torch.arange(bandit.n_action)
-    bees = torch.arange(0, population_size)
+    mean_qualities = torch.zeros((iterations, steps), device=device)
+    optimal_option_ratio = torch.zeros((iterations, steps), device=device)
 
-    # tiling bees
-    bees_copy_tiled = bees.tile((population_size, 1))
-    # These are possible neighbours, remove yourself from these neighbours
-    bees_copy_tiled[bees, bees] = -1
-    bees_copy_tiled = bees_copy_tiled[bees_copy_tiled != -1]
-    bees_copy_tiled = bees_copy_tiled.reshape(population_size, -1)
-    weights = torch.ones_like(bees_copy_tiled, dtype=torch.float)
+    for j in range(iterations):
+        seed = int(time.time() * 1e6) % (2**32 - 1)
+        print(f"seed {seed}")
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        
+        bandit = BanditLinear(name=name, device=device)
 
-    optimal_action_index_th = torch.tensor(bandit.optimal_action(), device=device)
+        types = torch.arange(bandit.n_action)
+        bees = torch.arange(0, population_size)
 
-    # create a one hot quality matrix for the bees
+        # tiling bees
+        bees_copy_tiled = bees.tile((population_size, 1))
+        # These are possible neighbours, remove yourself from these neighbours
+        bees_copy_tiled[bees, bees] = -1
+        bees_copy_tiled = bees_copy_tiled[bees_copy_tiled != -1]
+        bees_copy_tiled = bees_copy_tiled.reshape(population_size, -1)
+        weights = torch.ones_like(bees_copy_tiled, dtype=torch.float)
 
-    pop_opinions_init = types.repeat(population_size // bandit.n_action)
+        optimal_action_index_th = torch.tensor(bandit.optimal_action(), device=device)
 
-    for j in range(seeds):
+        #create a one hot quality matrix for the bees
 
+        pop_opinions_init = types.repeat(population_size // bandit.n_action)
         # initialize population with equal distribution of types
         pop_opinions = pop_opinions_init
 
@@ -166,90 +179,61 @@ def weighted_voter_rule(
             quality_matrix[bees, pop_opinions] = qualities
             # compute the qualities sum per option
 
-            if disjoint_neighbourhood:
-                # the idea is to create disjoint neighbourhoods so that you can have influence on exactly M neighbours.
-                shuffled_bees = bees.copy()
-                np.random.shuffle(shuffled_bees)
-                shuffled_bees_in_nei = shuffled_bees.reshape(
-                    int(population_size // neighbourhood_size), neighbourhood_size
-                )
+            if use_neighbourhood:
+                if disjoint_neighbourhood:
+                    # the idea is to create disjoint neighbourhoods so that you can have influence on exactly M neighbours.
+                    shuffled_bees = bees.copy()
+                    np.random.shuffle(shuffled_bees)
+                    shuffled_bees_in_nei = shuffled_bees.reshape(
+                        int(population_size // neighbourhood_size), neighbourhood_size
+                    )
 
-                # one hotted quality matrix
-                quality_matrix_nei = quality_matrix[shuffled_bees_in_nei]
-                quality_sum_per_option_nei = np.sum(quality_matrix_nei, axis=1)
-                weighted_proportions_nei = np.einsum(
-                    "ij,i->ij",
-                    quality_sum_per_option_nei,
-                    1 / np.sum(quality_sum_per_option_nei, axis=1),
-                )
+                    # one hotted quality matrix
+                    quality_matrix_nei = quality_matrix[shuffled_bees_in_nei]
+                    quality_sum_per_option_nei = np.sum(quality_matrix_nei, axis=1)
+                    weighted_proportions_nei = np.einsum(
+                        "ij,i->ij",
+                        quality_sum_per_option_nei,
+                        1 / np.sum(quality_sum_per_option_nei, axis=1),
+                    )
 
-                weighted_proportions_nei_tensor = torch.tensor(weighted_proportions_nei)
-                new_pop_opinions = torch.distributions.Categorical(
-                    weighted_proportions_nei_tensor
-                ).sample(sample_shape=(neighbourhood_size,))
-                pop_opinions = new_pop_opinions.reshape(population_size).numpy()
-
-            else:
-                # sampling (neighbourhood_size - 1) per bee, so you can have influence on multiple bees at the same time.
-                if neighbourhood_size == population_size:
-                    neighbours = bees_copy_tiled
+                    weighted_proportions_nei_tensor = torch.tensor(weighted_proportions_nei)
+                    new_pop_opinions = torch.distributions.Categorical(
+                        weighted_proportions_nei_tensor
+                    ).sample(sample_shape=(neighbourhood_size,))
+                    pop_opinions = new_pop_opinions.reshape(population_size).numpy()
 
                 else:
-                    idx = torch.multinomial(
-                        weights, num_samples=neighbourhood_size, replacement=False
+                    # sampling (neighbourhood_size - 1) per bee, so you can have influence on multiple bees at the same time.
+                    if neighbourhood_size == population_size:
+                        neighbours = bees_copy_tiled
+                    else: 
+                        idx = torch.multinomial(
+                            weights, num_samples=neighbourhood_size, replacement=False
+                        
+                        )
+                        neighbours = bees_copy_tiled.gather(1, idx)
+                    quality_matrix_nei = quality_matrix[neighbours]
+                    quality_sum_per_option_nei = quality_matrix_nei.sum(dim=1)
+                    weighted_proportions_nei = (
+                        quality_sum_per_option_nei
+                        / quality_sum_per_option_nei.sum(dim=1, keepdim=True)
                     )
-                    neighbours = bees_copy_tiled.gather(1, idx)
-                quality_matrix_nei = quality_matrix[neighbours]
-                quality_sum_per_option_nei = quality_matrix_nei.sum(dim=1)
-                weighted_proportions_nei = (
-                    quality_sum_per_option_nei
-                    / quality_sum_per_option_nei.sum(dim=1, keepdim=True)
-                )
+                    pop_opinions = torch.distributions.Categorical(
+                        weighted_proportions_nei
+                    ).sample()
+
+            else: 
+
+                quality_sum_per_option = quality_matrix.sum(dim=0)
+                # weighted proportion which defines the  the distribution of
+                # votes cast for each type
+                weighted_proportions = quality_sum_per_option / quality_sum_per_option.sum(dim=0)
+                # new opinions of the bees based on the weighted proportions
                 pop_opinions = torch.distributions.Categorical(
-                    weighted_proportions_nei
-                ).sample()
-            # idx = torch.multinomial(
-            #     weights, num_samples=neighbourhood_size, replacement=False
-            # )
-            # neighbours = bees_copy_tiled.gather(1, idx)
-            # quality_matrix_nei = quality_matrix[
-            #     neighbours
-            # ]  # shape: (population_size , neighborhood_size, n_arms)
-            # quality_sum_per_option_nei = quality_matrix_nei.sum(dim=1)
-            # weighted_proportions_nei = (
-            #     quality_sum_per_option_nei
-            #     / quality_sum_per_option_nei.sum(dim=1, keepdim=True)
-            # )
-            # # weighted_proportions_nei = np.einsum(
-            # #     "ij,i->ij",
-            # #     quality_sum_per_option_nei,
-            # #     1 / np.sum(quality_sum_per_option_nei, axis=1),
-            # # )
-            # pop_opinions = torch.distributions.Categorical(
-            #     weighted_proportions_nei
-            # ).sample()
-
-            # import pdb
-
-            # pdb.set_trace()
-
-            # naive implementation of the whole population as my neighbourhood
-            # print(pop_opinions)
-            # print(shuffled_bees_in_neighbourhood)
-            # print(quality_sum_per_option_neighbourhood)
-            # print(np.sum(quality_sum_per_option_neighbourhood, axis=1))
-            # print(weighted_proportions_neighbourhood)
-
-            # quality_sum_per_option = np.sum(quality_matrix, axis=0)
-            # # weighted proportion which defines the  the distribution of
-            # # votes cast for each type
-            # weighted_proportions = quality_sum_per_option / np.sum(
-            #     quality_sum_per_option
-            # )
-            # # new opinions of the bees based on the weighted proportions
-            # pop_opinions = np.random.choice(
-            #     np.arange(bandit.n_action), population_size, p=weighted_proportions
-            # )
+                        weighted_proportions
+                ).sample(sample_shape=(population_size,))
+                
             # compute the mean quality for this step
             # print(i)
             mean_qualities[j, i] = qualities.mean()
@@ -270,6 +254,7 @@ def run_parallel_simulation_wvr(
     seeds: int,
     neighbourhood_size: int,
     disjoint_neighbourhood: bool,
+    use_neighbourhood: bool,
     name: str,
     n_proc: int,
     device: str = "cpu",
@@ -282,8 +267,9 @@ def run_parallel_simulation_wvr(
             population_size,
             iterations,
             neighbourhood_size,
-            name,
             disjoint_neighbourhood,
+            use_neighbourhood,
+            name,
             device,
         )
         for _ in range(n_proc)
