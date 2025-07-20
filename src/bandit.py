@@ -52,8 +52,12 @@ class BanditSigmoid:
                 loc=self.mean, scale=self.q_star_std, size=self.n_action
             )
 
-        self.q_star_th = torch.tensor(self.q_star, device=self.device)
-        self.action_std_th = torch.tensor(self.action_std, device=self.device)
+        self.q_star_th = torch.tensor(
+            self.q_star, device=self.device, dtype=torch.float32
+        )
+        self.action_std_th = torch.tensor(
+            self.action_std, device=self.device, dtype=torch.float32
+        )
 
         self.s_q_star = self.compute_sigmoid_q_star()
 
