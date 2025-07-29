@@ -49,9 +49,10 @@ def imitaton_of_success(
     steps: int,
     population_size: int,
     iterations: int,
-    bandit: BanditLinear | BanditSigmoid,
     name: str,
     device: str = "cpu",
+    deterministic: bool = False,
+    stop_if_end: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Implements the imitation of success.
@@ -62,6 +63,8 @@ def imitaton_of_success(
       bandit (Bandit): The bandit environment to interact with
       name (str): name of the scenario for the bandit
       device (str): should be it on cpu or gpu
+      deterministic (bool): should I switch to imitating partner stochastically or deterministicaally
+      stop_if_end (bool): stop when the simulation converged
     Returns:
       mean_payoff (np.ndarray): Array indicating evolution of average payoffs over time
       optimal_type_ratio (np.ndarray): Array indicating evolution optimal type proportion over time
@@ -104,20 +107,36 @@ def imitaton_of_success(
             optimal_type_ratio[j, i] = pop_vector[optimal_action_index_th]
             # get payoffs for each individual
             payoffs = bandit.pull(pop_types)
-            # get imitating p
-            idx = torch.distributions.Categorical(weights).sample()
+            # get imitating partners idx
+            idx = torch.multinomial(weights, num_samples=1)
             imitating_partner_idx = individuals_copy_tiled.gather(1, idx)
-            # partners to imitate
+            # imitating partner type
             imitating_partner_type = pop_types[imitating_partner_idx]
             # rewards of partners
             imitating_reward = payoffs[imitating_partner_idx]
             # random probabilities for imitation
-            probabilities = torch.rand(population_size)
-            # update types based on imitation
-            pop_types = torch.where(
-                probabilities < imitating_reward, imitating_partner_type, pop_types
-            )
+            if not deterministic:
+                probabilities = torch.rand(population_size)
+                # update types based on imitation
+                pop_types = torch.where(
+                    probabilities < imitating_reward.squeeze(),
+                    imitating_partner_type.squeeze(),
+                    pop_types,
+                )
+            else:
+                # switch only if my imitating partner has a higher reward than me
+                pop_types = torch.where(
+                    payoffs < imitating_reward.squeeze(),
+                    imitating_partner_type.squeeze(),
+                    pop_types,
+                )
+
             mean_payoff[j, i] = payoffs.mean()  # average payoff
+            if stop_if_end:
+                if torch.any(pop_vector == 1):
+                    mean_payoff[j, i:] = mean_payoff[j, i]
+                    optimal_type_ratio[j, i:] = optimal_type_ratio[j, i]
+                    break
 
         # check if there is 1 in the policy vector
         # if not np.any(pop_vector == 1):
@@ -139,6 +158,7 @@ def majority_rule(
     use_neighbourhood: bool,
     name: str,
     device: str = "cpu",
+    stop_if_end: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Implements the majority rule model.
@@ -152,6 +172,7 @@ def majority_rule(
       use_neighbourhood (bool): use neighbourhood or use a simple
       name (str): scenario for bandit
       device (str): cpu or cuda
+      stop_if_end (bool): stop when the simulation converged
     Returns:
       mean_qualities (np.ndarray): Array indicating evolution of average payoffs over time
       optimal_option_ratio (np.ndarray): Array indicating evolution optimal option proportion over time
@@ -159,7 +180,6 @@ def majority_rule(
     mean_qualities = torch.zeros((iterations, steps), device=device)
     optimal_option_ratio = torch.zeros((iterations, steps), device=device)
     seed = int(time.time() * 1e6) % (2**32 - 1)
-    # print(f"seed {seed}")
     torch.manual_seed(seed)
     np.random.seed(seed)
 
@@ -186,10 +206,10 @@ def majority_rule(
         pop_opinions = pop_opinions_init
 
         for i in range(steps):
+
             # print(pop_opinions)
             # get population vector
             pop_vector = get_pop_vector(pop_types=pop_opinions, n_types=bandit.n_action)
-
             # pop optimal actions
             optimal_option_ratio[j, i] = pop_vector[optimal_action_index_th]
             # get qualities for each bees
@@ -296,6 +316,15 @@ def majority_rule(
             # print(i)
             mean_qualities[j, i] = qualities.mean()
 
+            if stop_if_end:
+                if torch.any(pop_vector == 1):
+                    # print(pop_vector)
+                    # print("ended earlier")
+                    # print(i)
+                    mean_qualities[j, i:] = mean_qualities[j, i]
+                    optimal_option_ratio[j, i:] = optimal_option_ratio[j, i]
+                    break
+
         # check if there is 1 in the policy vector
         # if not torch.any(pop_vector == 1):
         #     print(
@@ -315,6 +344,8 @@ def weighted_voter_rule(
     use_neighbourhood: bool,
     name: str,
     device: str = "cpu",
+    switch: str = "bee",
+    stop_if_end: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Implements the weighted voter model.
@@ -327,6 +358,8 @@ def weighted_voter_rule(
       use_neighbourhood (bool): use neighbourhood or use a simple
       name (str): scenario for bandit
       device (str): cpu or cuda
+      switch (str): how to switch, bee: bee based, is_det: follow is_det, is_stoc: follow is_stoc
+      stop_if_end (bool): stop when the simulation converged
     Returns:
       mean_qualities (np.ndarray): Array indicating evolution of average payoffs over time
       optimal_option_ratio (np.ndarray): Array indicating evolution optimal option proportion over time
@@ -412,15 +445,67 @@ def weighted_voter_rule(
                             weights, num_samples=neighbourhood_size, replacement=False
                         )
                         neighbours = bees_copy_tiled.gather(1, idx)
-                    quality_matrix_nei = quality_matrix[neighbours]
-                    quality_sum_per_option_nei = quality_matrix_nei.sum(dim=1)
-                    weighted_proportions_nei = (
-                        quality_sum_per_option_nei
-                        / quality_sum_per_option_nei.sum(dim=1, keepdim=True)
-                    )
-                    pop_opinions = torch.distributions.Categorical(
-                        weighted_proportions_nei
-                    ).sample()
+
+                    if switch == "bee":
+
+                        quality_matrix_nei = quality_matrix[neighbours]
+                        quality_sum_per_option_nei = quality_matrix_nei.sum(dim=1)
+                        weighted_proportions_nei_type = (
+                            quality_sum_per_option_nei
+                            / quality_sum_per_option_nei.sum(dim=1, keepdim=True)
+                        )
+                        pop_opinions = torch.distributions.Categorical(
+                            weighted_proportions_nei_type
+                        ).sample()
+
+                    elif switch == "is_stoc":
+                        qualities_nei = qualities[neighbours]
+                        opinions_nei = pop_opinions[neighbours]
+                        weighted_proportions_nei = qualities_nei / qualities_nei.sum(
+                            dim=1, keepdim=True
+                        )
+
+                        nei_idx = (
+                            torch.distributions.Categorical(weighted_proportions_nei)
+                            .sample()
+                            .unsqueeze(1)
+                        )
+
+                        imitating_partner_opinion = opinions_nei.gather(1, nei_idx)
+                        imitating_partner_qualities = qualities_nei.gather(1, nei_idx)
+
+                        probabilities = torch.rand(population_size)
+                        # update types based on imitation
+                        pop_opinions = torch.where(
+                            probabilities < imitating_partner_qualities.squeeze(),
+                            imitating_partner_opinion.squeeze(),
+                            pop_opinions,
+                        )
+                    else:
+
+                        qualities_nei = qualities[neighbours]
+                        opinions_nei = pop_opinions[neighbours]
+                        weighted_proportions_nei = qualities_nei / qualities_nei.sum(
+                            dim=1, keepdim=True
+                        )
+
+                        nei_idx = (
+                            torch.distributions.Categorical(weighted_proportions_nei)
+                            .sample()
+                            .unsqueeze(1)
+                        )
+
+                        imitating_partner_opinion = opinions_nei.gather(1, nei_idx)
+                        imitating_partner_qualities = qualities_nei.gather(1, nei_idx)
+
+                        # update types based on imitation
+                        pop_opinions = torch.where(
+                            qualities < imitating_partner_qualities.squeeze(),
+                            imitating_partner_opinion.squeeze(),
+                            pop_opinions,
+                        )
+
+                    # if deterministic switch only if it is better than
 
             else:
                 quality_sum_per_option = quality_matrix.sum(dim=0)
@@ -437,6 +522,11 @@ def weighted_voter_rule(
             # compute the mean quality for this step
             # print(i)
             mean_qualities[j, i] = qualities.mean()
+            if stop_if_end:
+                if torch.any(pop_vector == 1):
+                    mean_qualities[j, i:] = mean_qualities[j, i]
+                    optimal_option_ratio[j, i:] = optimal_option_ratio[j, i]
+                    break
 
         # check if there is 1 in the policy vector
         # if not np.any(pop_vector == 1):
@@ -451,26 +541,30 @@ def weighted_voter_rule(
 def run_parallel_simulation_wvr(
     steps: int,
     population_size: int,
-    seeds: int,
+    iterations: int,
     neighbourhood_size: int,
     disjoint_neighbourhood: bool,
     use_neighbourhood: bool,
     name: str,
     n_proc: int,
     device: str = "cpu",
+    switch: str = "bee",
+    stop_if_end: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
 
-    iterations = int(seeds // n_proc)
+    iterations_per_process = int(iterations // n_proc)
     args_list = [
         (
             steps,
             population_size,
-            iterations,
+            iterations_per_process,
             neighbourhood_size,
             disjoint_neighbourhood,
             use_neighbourhood,
             name,
             device,
+            switch,
+            stop_if_end,
         )
         for _ in range(n_proc)
     ]
@@ -482,15 +576,15 @@ def run_parallel_simulation_wvr(
     all_mean_qualities = np.stack(all_mean_qualities)
     all_opt_ratios = np.stack(all_opt_ratios)
 
-    return all_mean_qualities.reshape(seeds, steps), all_opt_ratios.reshape(
-        seeds, steps
+    return all_mean_qualities.reshape(iterations, steps), all_opt_ratios.reshape(
+        iterations, steps
     )
 
 
 def run_parallel_simulation_majority(
     steps: int,
     population_size: int,
-    seeds: int,
+    iterations: int,
     neighbourhood_size: int,
     disjoint_neighbourhood: bool,
     number_of_votes: int,
@@ -498,20 +592,22 @@ def run_parallel_simulation_majority(
     name: str,
     n_proc: int,
     device: str = "cpu",
+    stop_if_end: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
 
-    iterations = int(seeds // n_proc)
+    iterations_per_process = int(iterations // n_proc)
     args_list = [
         (
             steps,
             population_size,
-            iterations,
+            iterations_per_process,
             neighbourhood_size,
             disjoint_neighbourhood,
             number_of_votes,
             use_neighbourhood,
             name,
             device,
+            stop_if_end,
         )
         for _ in range(n_proc)
     ]
@@ -523,8 +619,8 @@ def run_parallel_simulation_majority(
     all_mean_qualities = np.stack(all_mean_qualities)
     all_opt_ratios = np.stack(all_opt_ratios)
 
-    return all_mean_qualities.reshape(seeds, steps), all_opt_ratios.reshape(
-        seeds, steps
+    return all_mean_qualities.reshape(iterations, steps), all_opt_ratios.reshape(
+        iterations, steps
     )
 
 
@@ -535,6 +631,8 @@ def run_parallel_simulation_is(
     name: str,
     n_proc: int,
     device: str = "cpu",
+    deterministic: bool = False,
+    stop_if_end: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
 
     iterations_per_process = int(iterations // n_proc)
@@ -545,6 +643,8 @@ def run_parallel_simulation_is(
             iterations_per_process,
             name,
             device,
+            deterministic,
+            stop_if_end,
         )
         for _ in range(n_proc)
     ]
