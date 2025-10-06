@@ -447,7 +447,7 @@ def weighted_voter_rule(
                         neighbours = bees_copy_tiled.gather(1, idx)
 
                     if switch == "bee":
-
+                        # calculate average rewards per type and sample a opinion from the distribution.
                         quality_matrix_nei = quality_matrix[neighbours]
                         quality_sum_per_option_nei = quality_matrix_nei.sum(dim=1)
                         weighted_proportions_nei_type = (
