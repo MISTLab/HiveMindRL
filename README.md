@@ -3,67 +3,104 @@
 
 ![](assets/intro.png)
 
-## Abstract ✨
+## Abstract
 
-Decision-making is an essential attribute of any intelligent agent or group.
-Natural systems are known to converge to optimal strategies through at least two distinct mechanisms: collective decision-making via imitation of others, and individual trial-and-error.
-This paper establishes an equivalence between these two paradigms by drawing from the well-established collective decision-making model of nest-hunting in swarms of honey bees.
-We show that the emergent distributed cognition (sometimes referred to as the $\textit{hive mind}$) arising from individual bees following simple, local imitation-based rules is that of a single online reinforcement learning (RL) agent interacting with many parallel environments.
-The update rule through which this macro-agent learns is a bandit algorithm that we coin $\textit{Maynard-Cross Learning}$.
-Our analysis implies that a group of cognition-limited organisms can be equivalent to a more complex, reinforcement-enabled entity, substantiating the idea that group-level intelligence may explain how seemingly simple and blind individual behaviors are selected in nature.
+This is the codebase for the experiments pertaining to "HiveMind is a single RL agent". In this paper we show that decentralised local imitation rules aggregate into a Single RL agent.  
 
-From a biological perspective, this analysis suggests how such imitation strategies
-evolved: they constitute a scalable form of reinforcement learning at the group
-level, aligning with theories of kin and group selection. Beyond biology, the
-framework offers new tools for analyzing economic and social systems where
-individuals imitate successful strategies, effectively participating in a
-collective learning process. In swarm intelligence, our findings will inform the
-design of scalable collective systems in artificial domains, enabling
-RL-inspired mechanisms for coordination and adaptability at scale.
+**Talk:** 
+
+[![Talk](https://img.youtube.com/vi/PpSpdPhTOsk/0.jpg)](https://www.youtube.com/live/PpSpdPhTOsk)
+
+---
+
+## Repository Structure
+
+```
+src/
+├── bandit.py                  # Bandit environments (Linear, Sigmoid, Congestion)
+├── reinforcement_learning.py  # RL algorithms: CL, MCL, P-CL, P-MCL
+├── population_simulation.py   # Population dynamics: Imitation of Success, Weighted Voter Rule, Majority Rule
+├── analytical_solutions.py    # Closed-form replicator dynamics (TRD, MRD)
+├── rl.ipynb                   # RL bandit experiments
+├── populations.ipynb          # Population simulation experiments
+└── plots.ipynb                # Supplementary/exploratory plots
+```
+
+---
+
+## Notebooks
+
+### `src/rl.ipynb` — RL Bandit Experiments
+
+Generates figures comparing the **Cross Learning (CL)** and **Maynard Cross Learning (MCL)** bandit algorithms against closed-form analytical baselines (TRD and MRD replicator dynamics) across three reward distributions (Low / Middle / High q_a's).
+
+| Section | Description | Output |
+|---|---|---|
+| Streaming RL | Single-environment CL and MCL at two learning rates (α = 0.001, 0.1) over up to 150k steps | `streaming_rl_experiments.pdf` |
+| Parallel RL | Multi-environment P-CL and P-MCL varying parallel environments B ∈ {10, 1000} | `parallel_rl_experiments.pdf` |
+| Congestion | CL/MCL on a two-action congestion bandit; includes interactive reward histogram widget | `congestion_experiment_rl.pdf` |
 
 
 
-banditcongestion = BanditCongestion(congestion_factors=[0.1, 0.9], device="cpu")
+---
 
-policy_vector = np.array([0.5, 0.5])
-actions = np.random.choice(
-    banditcongestion.return_no_actions(), size=1000, p=policy_vector
-)
+### `src/populations.ipynb` — Population Simulation Experiments
 
-print(policy_vector[actions])
-print(banditcongestion.congestion_factors[actions])
+Generates figures comparing **population simulations** (Weighted Voter Rule and Imitation of Success) against the same TRD/MRD analytical baselines.
 
-rewards = banditcongestion.pull(actions, policy_vector)
+| Section | Description | Output |
+|---|---|---|
+| Population size | R_wvoter and R_success at N ∈ {10, 1000} across all three reward distributions | `population_experiments.pdf` |
+| Neighbourhood size | R_wvoter with varying neighbourhood size M ∈ {2, 10, 1000} at fixed N=1000 | `nei_experiments.pdf` |
+| Hybrid algorithms | Deterministic/stochastic Imitation of Success combined with R_wvoter | `hybrid_experiments.pdf` |
+| Congestion | R_success and R_wvoter on the two-action congestion bandit at N=2000 | `congestion_experiments_pop.pdf` |
 
-# plot rewards distribution per action type
-rewards_action_0 = rewards[actions == 0]
-rewards_action_1 = rewards[actions == 1]
 
-# plot them side by side
-fig, ax = plt.subplots(1, 2)
-ax[0].hist(rewards_action_0, bins=20)
-ax[1].hist(rewards_action_1, bins=20)
-# plt.hist(rewards_action_0, bins=20)
-ax[0].set_xlim(0, 1)
-ax[1].set_xlim(0, 1)
 
-mean_fitness, policy = replicator_dynamic(
-    delta=1, bandit=banditcongestion, steps=30, trd=False
-)
+---
 
-# plot mean fitness
-fig, ax = plt.subplots(2, 1)
-ax[0].plot(mean_fitness)
+### `src/plots.ipynb` — Supplementary Plots
 
-ax[1].plot(policy)
-ax[1].plot(1 - policy)
-ax[1].set_ylim(0, 1)
+Standalone exploratory figures probing specific algorithmic properties.
 
-steps = 100
-rewards, policy_cl = parallel_cross_learning(
-    steps=steps, seeds=10, bandit=banditcongestion, parallel_envs=1000
-)
+| Cell | Description | Output |
+|---|---|---|
+| MCL with many alphas | MCL convergence at α ∈ {0.001, 0.05, 0.01} vs. P-MCL on evenly-spaced bandit | `MCL_with_many_alphas.pdf` |
+| WVR neighbourhood sweep | R_wvoter with M ∈ {1, 2, 5, 10, 500} at N=500 | `wvr_with_many_nei_sizes.pdf` |
+| WVR population sweep | R_wvoter convergence for N ∈ {10, 20, 50, 100, 500} | `R_wvoter_scenario_evenly_spaced.pdf` |
+| Majority rule population sweep | Majority Rule for N ∈ {10, 20, 50, 100, 1000} | `Majority_population_scenario_evenly_spaced.pdf` |
+| Majority rule neighbourhood sweep | Majority Rule with M ∈ {2, 10, 50, 100, 500} | `majority_with_many_nei_sizes.pdf` |
+| Majority rule vote sweep | Varies votes S ∈ {1, 3, 10, 20, 100, 10000, ∞}; S=1 recovers WVR, S→∞ recovers deterministic majority | `majority_rule.pdf` |
+| Frankenstein bee | Hybrid: deterministic/stochastic Imitation of Success with R_wvoter vs. TRD/MRD | `frankstein_bee.pdf` |
 
-mean_fitness_rd, policy_rd = replicator_dynamic(
-    delta=1, bandit=banditcongestion, steps=steps, trd=False
-)
+---
+
+## Algorithms
+
+| Symbol | Name | Parameters |
+|---|---|---|
+| CL | Cross Learning | `steps` — simulation steps<br>`seeds` — independent runs<br>`alpha` — learning rate<br>`bandit` — environment |
+| MCL | Maynard Cross Learning | `steps` — simulation steps<br>`seeds` — independent runs<br>`alpha` — learning rate<br>`alpha_baseline` — baseline tracker rate<br>`bandit` — environment |
+| P-CL | Parallel Cross Learning | `steps` — simulation steps<br>`seeds` — independent runs<br>`parallel_envs` — number of parallel environments (B)<br>`bandit` — environment |
+| P-MCL | Parallel Maynard Cross Learning | `steps` — simulation steps<br>`seeds` — independent runs<br>`parallel_envs` — number of parallel environments (B)<br>`bandit` — environment |
+| R_success | Imitation of Success | `steps` — simulation steps<br>`population_size` — N<br>`iterations` — independent runs<br>`deterministic` — switch rule (stochastic or deterministic)<br>`stop_if_end` — halt at convergence |
+| R_wvoter | Weighted Voter Rule | `steps` — simulation steps<br>`population_size` — N<br>`iterations` — independent runs<br>`neighbourhood_size` — M<br>`switch` — update mode (bee / is_det / is_stoc)<br>`stop_if_end` — halt at convergence |
+| TRD | Taylor Replicator Dynamic | `steps` — simulation steps<br>`delta` — time step<br>`bandit` — environment |
+| MRD | Maynard Replicator Dynamic | `steps` — simulation steps<br>`delta` — time step<br>`bandit` — environment |
+
+---
+
+## Citation
+
+If you use this code, please cite:
+
+```bibtex
+@article{soma2024hivemind,
+  title={The Hive Mind is a Single Reinforcement Learning Agent},
+  author={Soma, Karthik and Bouteiller, Yann and Hamann, Heiko and Beltrame, Giovanni},
+  journal={arXiv preprint arXiv:2410.17517},
+  year={2024},
+  doi={10.48550/arXiv.2410.17517}
+}
+```
+
