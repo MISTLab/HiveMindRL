@@ -5,10 +5,12 @@ import torch
 from bandit import (
     BanditLinear,
     BanditSigmoid,
+    BanditCongestion,
 )  # Assuming Bandit class is defined in bandit.py
 
 import os
 import torch
+from typing import Optional as optional
 import multiprocessing as mp
 from functools import partial
 import time
@@ -53,6 +55,7 @@ def imitaton_of_success(
     device: str = "cpu",
     deterministic: bool = False,
     stop_if_end: bool = False,
+    bandit: optional[BanditLinear | BanditSigmoid | BanditCongestion] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Implements the imitation of success.
@@ -77,7 +80,10 @@ def imitaton_of_success(
     torch.manual_seed(seed)
     np.random.seed(seed)
 
-    bandit = BanditLinear(name=name, device=device)
+    if bandit is not None:
+        bandit = bandit
+    else:
+        bandit = BanditLinear(name=name, device=device)
 
     for j, _ in enumerate(range(iterations)):
 
@@ -106,7 +112,10 @@ def imitaton_of_success(
             # pop optimal actions
             optimal_type_ratio[j, i] = pop_vector[optimal_action_index_th]
             # get payoffs for each individual
-            payoffs = bandit.pull(pop_types)
+            if isinstance(bandit, BanditCongestion):
+                payoffs = bandit.pull(pop_types, pop_vector)
+            else:
+                payoffs = bandit.pull(pop_types)
             # get imitating partners idx
             idx = torch.multinomial(weights, num_samples=1)
             imitating_partner_idx = individuals_copy_tiled.gather(1, idx)
@@ -346,6 +355,7 @@ def weighted_voter_rule(
     device: str = "cpu",
     switch: str = "bee",
     stop_if_end: bool = False,
+    bandit: optional[BanditLinear | BanditSigmoid | BanditCongestion] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Implements the weighted voter model.
@@ -373,7 +383,10 @@ def weighted_voter_rule(
         torch.manual_seed(seed)
         np.random.seed(seed)
 
-        bandit = BanditLinear(name=name, device=device)
+        if bandit is not None:
+            bandit = bandit
+        else:
+            bandit = BanditLinear(name=name, device=device)
 
         types = torch.arange(bandit.n_action)
         bees = torch.arange(0, population_size)
@@ -401,7 +414,11 @@ def weighted_voter_rule(
             # pop optimal actions
             optimal_option_ratio[j, i] = pop_vector[optimal_action_index_th]
             # get qualities for each bees
-            qualities = bandit.pull(pop_opinions)
+            if isinstance(bandit, BanditCongestion):
+                qualities = bandit.pull(pop_opinions, pop_vector)
+            else:
+                qualities = bandit.pull(pop_opinions)
+
             quality_matrix = torch.zeros(
                 (population_size, bandit.n_action), dtype=torch.float32, device=device
             )
@@ -550,24 +567,45 @@ def run_parallel_simulation_wvr(
     device: str = "cpu",
     switch: str = "bee",
     stop_if_end: bool = False,
+    bandit: optional[BanditLinear | BanditSigmoid | BanditCongestion] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
 
     iterations_per_process = int(iterations // n_proc)
-    args_list = [
-        (
-            steps,
-            population_size,
-            iterations_per_process,
-            neighbourhood_size,
-            disjoint_neighbourhood,
-            use_neighbourhood,
-            name,
-            device,
-            switch,
-            stop_if_end,
-        )
-        for _ in range(n_proc)
-    ]
+    
+    if bandit is not None:
+        args_list = [
+            (
+                steps,
+                population_size,
+                iterations_per_process,
+                neighbourhood_size,
+                disjoint_neighbourhood,
+                use_neighbourhood,
+                name,
+                device,
+                switch,
+                stop_if_end,
+                bandit,
+            )
+            for _ in range(n_proc)
+        ]
+    
+    else:
+        args_list = [
+            (
+                steps,
+                population_size,
+                iterations_per_process,
+                neighbourhood_size,
+                disjoint_neighbourhood,
+                use_neighbourhood,
+                name,
+                device,
+                switch,
+                stop_if_end,
+            )
+            for _ in range(n_proc)
+        ]
 
     with mp.Pool(processes=n_proc) as pool:
         results = pool.starmap(weighted_voter_rule, args_list)
@@ -633,21 +671,38 @@ def run_parallel_simulation_is(
     device: str = "cpu",
     deterministic: bool = False,
     stop_if_end: bool = False,
+    bandit: optional[BanditLinear | BanditSigmoid | BanditCongestion] = None,
 ) -> tuple[np.ndarray, np.ndarray]:
 
     iterations_per_process = int(iterations // n_proc)
-    args_list = [
-        (
-            steps,
-            population_size,
-            iterations_per_process,
-            name,
-            device,
-            deterministic,
-            stop_if_end,
-        )
-        for _ in range(n_proc)
-    ]
+    if bandit is not None:
+        args_list = [
+            (
+                steps,
+                population_size,
+                iterations_per_process,
+                name,
+                device,
+                deterministic,
+                stop_if_end,
+                bandit,
+            )
+            for _ in range(n_proc)
+        ]
+    
+    else:
+        args_list = [
+            (
+                steps,
+                population_size,
+                iterations_per_process,
+                name,
+                device,
+                deterministic,
+                stop_if_end,
+            )
+            for _ in range(n_proc)
+        ]
 
     with mp.Pool(processes=n_proc) as pool:
         results = pool.starmap(imitaton_of_success, args_list)

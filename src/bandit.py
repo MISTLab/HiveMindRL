@@ -148,7 +148,7 @@ class BanditLinear:
           gap: (float): unifrom distribution of numbers generated between (action mean - gap) to (action mean + gap)
           name (str): Name of the bandit, used to create specific q_star distributions
                       (e.g., "near zero", "near one", "evenly spaced").
-                      If None, a n_action number of means are
+                      If None, a n_action number of means are randomly generated between start and stop values.
           cpu (str): can be cuda or cpu.
         """
         self.n_action = n_action
@@ -191,7 +191,9 @@ class BanditLinear:
         """
         return np.argmax(self.q_star)
 
-    def pull(self, action: int | np.ndarray | torch.Tensor) -> float | torch.Tensor:
+    def pull(
+        self, action: int | np.ndarray | torch.Tensor
+    ) -> float | np.ndarray | torch.Tensor:
         """
         Pulls the action and returns the reward for a single action or a vector of actions.
         If action is an int, it returns a float; if it's an ndarray, it returns a torch.Tensor.
@@ -228,3 +230,107 @@ class BanditLinear:
         Returns the expected optimal reward, which is the maximum of the q_star values
         """
         return np.max(self.q_star)
+
+
+class BanditCongestion:
+    """A class simulating congestion in population experiments, where the reward of an action decreases as more individuals choose it."""
+
+    def __init__(
+        self,
+        n_action: int = 2,
+        congestion_factors: list[float] = [0.5, 0.5],
+        q_star: list[float] = [0.5, 0.5],
+        device: str = "cpu",
+        gap: float = 0.1,
+    ) -> None:
+        """
+        Initializes the bandit with the number of actions
+        Args:
+          n_action (int): Number of actions available in the bandit (arms), for now we will only support 2 actions
+          congestion_factors (list[float]): A list of congestion factors for each action, where each factor is <= q_star - gap.
+          q_star (list[float]): A list of mean rewards for each action without congestion
+          cpu (str): can be cuda or cpu.
+          gap (float): unifrom distribution of numbers generated between (action mean - gap) to (action mean + gap)
+        """
+        self.n_action = n_action
+        self.device = device
+        self.congestion_factors = np.array(congestion_factors, dtype=np.float32)
+
+        # for simplicity we will assume the same q_star for both actions, which is set to q_star
+
+        self.q_star = np.array(q_star, dtype=np.float32)
+        self.gap = gap
+
+        #
+        self.q_star_th = torch.tensor(
+            self.q_star, device=self.device, dtype=torch.float32
+        )
+
+        self.gap_th = torch.tensor(self.gap, device=self.device, dtype=torch.float32)
+
+        self.congestion_factors_th = torch.tensor(
+            self.congestion_factors, device=self.device, dtype=torch.float32
+        )
+
+        # maybe add linear noise like in the linear bandit
+
+    def pull(
+        self, action: int | np.ndarray | torch.Tensor, policy
+    ) -> float | np.ndarray | torch.Tensor:
+        """
+        Pulls the action and returns the reward for a single action or a vector of actions, taking into account the population congestion.
+        If action is an int, it returns a float; if it's an ndarray, it returns a torch.Tensor.
+        """
+        if isinstance(action, int):
+            r = np.random.uniform(
+                low=self.q_star[action] - self.gap,
+                high=self.q_star[action] + self.gap,
+                size=1,
+            )
+            r_congested = r - self.congestion_factors[action] * policy[action]
+            assert 0 <= r_congested <= 1, "rewards are not between 0 and 1"
+            return r_congested
+
+        if isinstance(action, np.ndarray):
+            r = np.random.uniform(
+                low=self.q_star[action] - self.gap,
+                high=self.q_star[action] + self.gap,
+            )
+            r_congested = r - self.congestion_factors[action] * policy[action]
+            assert (
+                r_congested.all() <= 1 and r_congested.all() >= 0
+            ), "r array is not between 0 and 1"
+            return r_congested
+
+        if isinstance(action, torch.Tensor):
+            r = torch.distributions.uniform.Uniform(
+                low=self.q_star_th[action] - self.gap_th,
+                high=self.q_star_th[action] + self.gap_th,
+            ).sample()
+            r_congested = r - self.congestion_factors_th[action] * policy[action]
+            assert (
+                r_congested.all() <= 1 and r_congested.all() >= 0
+            ), "r array is not between 0 and 1"
+            return r_congested
+
+        raise TypeError("Action must be an int | numpy ndarray | or torch tensor")
+
+    def return_no_actions(self) -> int:
+        """
+        Returns the number of actions available in the bandit
+        """
+        return self.n_action
+
+    def get_s_q_star(self, policy) -> np.ndarray:
+        """
+        Returns the expected q_star with congestion taken into account. only for replicator dynamic
+        """
+        s_q_star = self.q_star - self.congestion_factors * policy
+        return s_q_star
+
+    def optimal_action(self) -> int:
+        """
+        In this simple case, since the rewards without congestion are the same,
+        so the one with the least congestion factor will be the optimal action
+        """
+        return np.argmin(self.congestion_factors)

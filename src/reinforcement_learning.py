@@ -2,7 +2,7 @@
 
 import numpy as np
 import torch
-from bandit import BanditSigmoid, BanditLinear
+from bandit import BanditSigmoid, BanditLinear, BanditCongestion
 
 
 def streaming_cross_learning(
@@ -115,7 +115,7 @@ def streaming_maynard_cross_learning(
 
 
 def parallel_cross_learning(
-    steps: int, seeds: int, bandit: BanditSigmoid | BanditLinear, parallel_envs: int
+    steps: int, seeds: int, bandit: BanditSigmoid | BanditLinear | BanditCongestion, parallel_envs: int
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Implements the parallel version of cross learning.
@@ -142,7 +142,11 @@ def parallel_cross_learning(
                 bandit.return_no_actions(), parallel_envs, p=policy
             )
 
-            parallel_rewards = bandit.pull(parallel_actions)
+            if isinstance(bandit, BanditCongestion):
+                parallel_rewards = bandit.pull(parallel_actions, policy)
+            else:
+                parallel_rewards = bandit.pull(parallel_actions)
+
             action_mask = np.zeros((parallel_envs, bandit.n_action))
             action_mask[np.arange(parallel_envs), parallel_actions] = 1
             cases = action_mask - np.broadcast_to(
@@ -156,7 +160,7 @@ def parallel_cross_learning(
 
 
 def parallel_maynard_cross_learning(
-    steps: int, seeds: int, bandit: BanditSigmoid | BanditLinear, parallel_envs: int
+    steps: int, seeds: int, bandit: BanditSigmoid | BanditLinear | BanditCongestion , parallel_envs: int
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Implements the parallel version of maynard cross learning.
@@ -183,7 +187,11 @@ def parallel_maynard_cross_learning(
                 bandit.return_no_actions(), parallel_envs, p=policy
             )
 
-            parallel_rewards = bandit.pull(parallel_actions)
+            if isinstance(bandit, BanditCongestion):
+                parallel_rewards = bandit.pull(parallel_actions, policy)
+            else:
+                parallel_rewards = bandit.pull(parallel_actions)
+
             action_mask = np.zeros((parallel_envs, bandit.n_action))
             action_mask[np.arange(parallel_envs), parallel_actions] = 1
             reward_mean = np.mean(parallel_rewards)
