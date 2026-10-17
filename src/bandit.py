@@ -24,7 +24,7 @@ class BanditSigmoid:
           name (str): Name of the bandit, used to create specific q_star distributions
                       (e.g., "near zero", "near one", "evenly spaced").
                       If None, a random distribution is used.
-          cpu (str): can be cuda or cpu.
+          device (str): can be cuda or cpu.
         """
         self.n_action = n_action
         self.mean = mean
@@ -232,6 +232,56 @@ class BanditLinear:
         return np.max(self.q_star)
 
 
+class BanditGames:
+    """A class where individuals play simple n player games"""
+
+    def __init__(self, game="pd", device: str="cpu") -> None:
+        """
+        Initializes the bandit with the number of actions
+        Args:
+          game (str): The type of game to simulate. Currently supports "pd" (Prisoner's Dilemma) and "sh" (Stag Hunt).
+          device (str): can be cuda or cpu.
+        """
+        self.device = device
+        if game == "pd":
+            self.payoff_matrix = np.array([[3, 0], [5, 1]])
+            self.num_actions = 2
+
+        elif game == "sh":
+            self.payoff_matrix = np.array([[4, 0], [3, 2]])
+            self.num_actions = 2
+
+        elif game == "rps":
+            self.payoff_matrix = np.array([[0, -1, 1], [1, 0, -1], [-1, 1, 0]])
+            self.num_actions = 3
+
+        else:
+            raise ValueError("Unsupported game type. Use 'pd' or 'sh'.")
+
+        self.payoff_matrix_th = torch.tensor(self.payoff_matrix, device=self.device, dtype=torch.float32)
+
+    def pull(self, action_pair: np.ndarray | torch.Tensor) -> np.ndarray | torch.Tensor:
+        """
+        Pulls the action pair and returns the rewards for the ego agent.
+        Args:
+            action_pair (np.ndarray | torch.Tensor): A pair of actions taken by two players.
+        Returns:
+            np.ndarray | torch.Tensor: The rewards for the ego agent based on the payoff matrix.
+        """
+        if isinstance(action_pair, np.ndarray):
+            ego_action, other_action = action_pair[:, 0], action_pair[:, 1]
+            reward = self.payoff_matrix[ego_action, other_action]
+            return reward
+
+        if isinstance(action_pair, torch.Tensor):
+            ego_action, other_action = action_pair[:, 0], action_pair[:, 1]
+            reward = self.payoff_matrix_th[ego_action, other_action]
+            return reward
+
+        raise TypeError("action_pair must be a numpy ndarray or a torch tensor")
+
+
+
 class BanditCongestion:
     """A class simulating congestion in population experiments, where the reward of an action decreases as more individuals choose it."""
 
@@ -297,6 +347,7 @@ class BanditCongestion:
                 high=self.q_star[action] + self.gap,
             )
             r_congested = r - self.congestion_factors[action] * policy[action]
+            # r_congested = np.round(r_congested, decimals=2)
             assert (
                 r_congested.all() <= 1 and r_congested.all() >= 0
             ), "r array is not between 0 and 1"

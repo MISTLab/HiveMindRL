@@ -146,6 +146,8 @@ def parallel_cross_learning(
                 parallel_rewards = bandit.pull(parallel_actions, policy)
             else:
                 parallel_rewards = bandit.pull(parallel_actions)
+            
+            # print(parallel_rewards)
 
             action_mask = np.zeros((parallel_envs, bandit.n_action))
             action_mask[np.arange(parallel_envs), parallel_actions] = 1

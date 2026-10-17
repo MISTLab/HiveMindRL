@@ -9,7 +9,6 @@ from bandit import (
 )  # Assuming Bandit class is defined in bandit.py
 
 import os
-import torch
 from typing import Optional as optional
 import multiprocessing as mp
 from functools import partial
@@ -66,7 +65,7 @@ def imitaton_of_success(
       bandit (Bandit): The bandit environment to interact with
       name (str): name of the scenario for the bandit
       device (str): should be it on cpu or gpu
-      deterministic (bool): should I switch to imitating partner stochastically or deterministicaally
+      deterministic (bool): should I switch to imitating partner stochastically or deterministically
       stop_if_end (bool): stop when the simulation converged
     Returns:
       mean_payoff (np.ndarray): Array indicating evolution of average payoffs over time

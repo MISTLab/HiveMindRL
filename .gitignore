@@ -1,3 +1,5 @@
 *.pyc
 .venv
+slides/
 hivemind_revision_refs/
+*.zip
